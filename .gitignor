@@ -1,0 +1,10 @@
+# .gitignore
+allure-results/
+allure-report/
+.pytest_cache/
+__pycache__/
+*.pyc
+.env
+venv/
+.idea/
+.vscode/
