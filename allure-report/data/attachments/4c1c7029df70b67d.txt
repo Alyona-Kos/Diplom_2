@@ -1,0 +1,1 @@
+[33mWARNING [0m conftest:conftest.py:146 Не удалось удалить пользователя test.user.1765470855738.ca551958@example.org: статус=202

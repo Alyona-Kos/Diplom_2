@@ -1,0 +1,1 @@
+Warning: Failed to delete user kovalevamarina@example.com

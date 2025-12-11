@@ -1,49 +1,97 @@
+# tests/test_login_user.py
 import allure
 import pytest
-import requests
-from data.api_information import Endpoints, ResponseCode, ResponseMessages
-from helpers.helpers import User  # Исправлен импорт - из helpers.helpers
+from data.api_information import ResponseCode, ResponseMessages
+from helpers.helpers import User
+from helpers.requests import login_user
+
 
 class TestLoginUser:
 
-    @allure.title(
-        'При отправке запроса на авторизацию пользователя в веб-сервисе - код ответа 200 ОК, пользователь логинится')
-    @allure.description('В рамках данного тест-кейса проверяется, '
-                        'что при отправке запроса на авторизацию пользователя в веб-сервисе - код ответа 200 ОК, пользователь логинится')
-    def test_login_with_existing_user_success(self, user_with_cleanup):
-        with allure.step("Отправить запрос на создание пользователя"):
-            payload, create_response = user_with_cleanup
-
+    @allure.title('Логин существующего пользователя - успешно')
+    @allure.description('Проверка успешного логина существующего пользователя')
+    def test_login_with_existing_user_success(self, registered_user_for_login):
+        payload = registered_user_for_login
+        
         with allure.step("Подготовить данные для логина"):
             login_payload = {
                 "email": payload["email"],
                 "password": payload["password"]
             }
-
-        with allure.step("Отправить запрос на логин пользователя в веб-сервисе"):
-            login_response = requests.post(Endpoints.LOGIN_USER, json=login_payload)
-
-        with allure.step("Проверить успешный вход"):
-            assert login_response.status_code == ResponseCode.OK
-            assert login_response.json().get("success") == True
-            assert "accessToken" in login_response.json()
-            assert "refreshToken" in login_response.json()
-            assert login_response.json().get("user") is not None
-            assert login_response.json()["user"]["email"] == payload["email"]
-            assert login_response.json()["user"]["name"] == payload["name"]
-
-    @allure.title(
-        'При отправке запроса на авторизацию пользователя в веб-сервисе с невалидными данными - код ответа 401 Unauthorized, пользователь не логинится')
-    @allure.description('В рамках данного тест-кейса проверяется, '
-                        'что при отправке запроса на авторизацию пользователя в веб-сервисе с невалидными данными - код ответа 401 Unauthorized, пользователь не логинится')
-    def test_login_with_invalid_credentials_should_fail(self):
-        # Использование нового метода для создания невалидных данных для логина
-        invalid_payload = User.create_invalid_login_credentials()
         
-        with allure.step("Отправить запрос на логин пользователя с невалидными данными"):
-            response = requests.post(Endpoints.LOGIN_USER, json=invalid_payload)
+        with allure.step("Отправить запрос на логин пользователя"):
+            login_response = login_user(login_payload)
+        
+        with allure.step("Проверить успешный вход"):
+            assert login_response.status_code == ResponseCode.OK, (
+                f"Ожидался код {ResponseCode.OK}, получен {login_response.status_code}. "
+                f"Ответ: {login_response.text}"
+            )
             
-        with allure.step("Проверить, что код ответа соответствует 401 Unauthorized"):
-            assert response.status_code == ResponseCode.UNAUTHORIZED
-            assert response.json().get("success") == False
-            assert response.json().get("message") == ResponseMessages.INVALID_CREDENTIALS
+            response_data = login_response.json()
+            assert response_data.get("success") == True, "Флаг success должен быть True"
+            assert "accessToken" in response_data, "В ответе должен быть accessToken"
+            assert "refreshToken" in response_data, "В ответе должен быть refreshToken"
+            assert response_data.get("user") is not None, "В ответе должен быть объект user"
+            
+            user_data = response_data["user"]
+            assert user_data.get("email") == payload["email"], "Email должен совпадать"
+            assert user_data.get("name") == payload["name"], "Name должен совпадать"
+
+    @allure.title('Логин с невалидными данными - ошибка 401')
+    @allure.description('Проверка ошибки при логине с неверными данными (согласно документации API)')
+    def test_login_with_invalid_credentials_should_fail(self):
+        invalid_credentials = User.create_invalid_login_credentials()
+        
+        with allure.step("Попытка логина с невалидными данными"):
+            login_response = login_user(invalid_credentials)
+        
+        with allure.step("Проверить, что логин не удался"):
+            # Согласно документации: если логин или пароль неверные → 401 Unauthorized
+            assert login_response.status_code == ResponseCode.UNAUTHORIZED, (
+                f"Ожидался код {ResponseCode.UNAUTHORIZED}, получен {login_response.status_code}"
+            )
+            
+            response_data = login_response.json()
+            assert response_data.get("success") == False, "Флаг success должен быть False"
+            assert response_data.get("message") == ResponseMessages.INVALID_CREDENTIALS
+
+    @allure.title('Логин без email - ошибка 401')
+    @allure.description('Проверка ошибки при логине без email (согласно документации API)')
+    def test_login_without_email_should_fail(self):
+        """
+        Согласно документации: если нет одного из полей → 401 Unauthorized
+        """
+        payload = User.create_user_without_email()
+        
+        with allure.step("Попытка логина без email"):
+            login_response = login_user(payload)
+        
+        with allure.step("Проверить ошибку"):
+            assert login_response.status_code == ResponseCode.UNAUTHORIZED, (
+                f"Ожидался код {ResponseCode.UNAUTHORIZED}, получен {login_response.status_code}"
+            )
+            
+            response_data = login_response.json()
+            assert response_data.get("success") == False, "Флаг success должен быть False"
+            assert response_data.get("message") == ResponseMessages.INVALID_CREDENTIALS
+
+    @allure.title('Логин без пароля - ошибка 401')
+    @allure.description('Проверка ошибки при логине без пароля (согласно документации API)')
+    def test_login_without_password_should_fail(self):
+        """
+        Согласно документации: если нет одного из полей → 401 Unauthorized
+        """
+        payload = User.create_user_without_password()
+        
+        with allure.step("Попытка логина без пароля"):
+            login_response = login_user(payload)
+        
+        with allure.step("Проверить ошибку"):
+            assert login_response.status_code == ResponseCode.UNAUTHORIZED, (
+                f"Ожидался код {ResponseCode.UNAUTHORIZED}, получен {login_response.status_code}"
+            )
+            
+            response_data = login_response.json()
+            assert response_data.get("success") == False, "Флаг success должен быть False"
+            assert response_data.get("message") == ResponseMessages.INVALID_CREDENTIALS

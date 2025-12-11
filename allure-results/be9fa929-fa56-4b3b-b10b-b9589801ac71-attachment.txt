@@ -1,0 +1,1 @@
+[33mWARNING [0m conftest:conftest.py:150 Не удалось удалить пользователя vladimirovaija@example.org: статус=202
