@@ -2,6 +2,7 @@
 import pytest
 import allure
 import logging
+from typing import Tuple, Dict, Any, Optional, Callable
 from helpers.helpers import User
 from helpers.requests import creating_new_user, delete_user, get_ingredients
 from data.api_information import ResponseCode
@@ -10,77 +11,86 @@ from data.api_information import ResponseCode
 logger = logging.getLogger(__name__)
 
 
-@pytest.fixture
-def user_with_cleanup():
+class UserManager:
     """
-    Фикстура создает пользователя как предусловие для тестов.
-    Используется в тестах, где нужно иметь уже созданного пользователя.
-    Возвращает: (payload, response)
-    АВТОМАТИЧЕСКИ удаляет пользователя после теста.
+    Класс-менеджер для управления пользователями в тестах.
+    Инкапсулирует логику создания и удаления пользователей.
     """
-    payload = User.create_data_correct_user()
     
-    with allure.step(f"Создание тестового пользователя (предусловие): {payload['email']}"):
-        response = creating_new_user(payload)
+    @staticmethod
+    def create_test_user() -> Tuple[Dict[str, str], Any]:
+        """
+        Создает тестового пользователя.
+        Возвращает: (payload, response)
+        """
+        payload = User.create_data_correct_user()
         
-        if response.status_code != ResponseCode.OK:
-            # Подробная информация об ошибке
-            error_msg = (
-                f"Не удалось создать пользователя как предусловие.\n"
-                f"Код ответа: {response.status_code}\n"
-                f"Email: {payload['email']}\n"
-                f"Ответ сервера: {response.text}"
-            )
-            pytest.fail(error_msg)
+        with allure.step(f"Создание тестового пользователя: {payload['email']}"):
+            response = creating_new_user(payload)
+            
+            if response.status_code != ResponseCode.OK:
+                error_msg = (
+                    f"Не удалось создать пользователя.\n"
+                    f"Код ответа: {response.status_code}\n"
+                    f"Email: {payload['email']}\n"
+                    f"Ответ сервера: {response.text}"
+                )
+                pytest.fail(error_msg)
+        
+        return payload, response
     
-    yield payload, response
-    
-    # АВТОМАТИЧЕСКАЯ ОЧИСТКА ПОСЛЕ ТЕСТА
-    with allure.step(f"Очистка: удаление пользователя (постусловие): {payload['email']}"):
-        try:
-            token = response.json().get("accessToken")
-            if token:
+    @staticmethod
+    def cleanup_user(token: str, email: str) -> None:
+        """
+        Удаляет пользователя после теста.
+        """
+        if not token:
+            logger.warning(f"Не получен токен для удаления пользователя {email}")
+            return
+        
+        with allure.step(f"Очистка: удаление пользователя (постусловие): {email}"):
+            try:
                 delete_response = delete_user(token)
                 if delete_response.status_code != ResponseCode.OK:
                     logger.warning(
-                        f"Не удалось удалить пользователя {payload['email']}: "
+                        f"Не удалось удалить пользователя {email}: "
                         f"статус={delete_response.status_code}"
                     )
-        except Exception as e:
-            logger.error(f"Ошибка при очистке для {payload['email']}: {e}")
-
-
-@pytest.fixture
-def registered_user_for_login():
-    """
-    Фикстура создает пользователя как предусловие для тестов логина и создания дубликатов.
-    Возвращает payload пользователя.
-    АВТОМАТИЧЕСКИ удаляет пользователя после теста.
-    """
-    payload = User.create_data_correct_user()
-    token = None
+            except Exception as e:
+                logger.error(f"Ошибка при очистке для {email}: {e}")
     
-    with allure.step(f"Регистрация пользователя для тестов (предусловие): {payload['email']}"):
-        response = creating_new_user(payload)
+    @staticmethod
+    def extract_token(response) -> Optional[str]:
+        """
+        Извлекает токен из ответа сервера.
+        """
+        try:
+            return response.json().get("accessToken")
+        except Exception:
+            return None
+
+
+def user_fixture_factory(return_type: str = "payload_response"):
+    """
+    Фабрика для создания фикстур пользователей с разными возвращаемыми значениями.
+    
+    Args:
+        return_type: тип возвращаемых данных:
+            - "payload_response": возвращает (payload, response)
+            - "payload": возвращает только payload
+            - "authenticated": возвращает (payload, auth_header)
+            - "full": возвращает (payload, response, token)
+    """
+    @pytest.fixture
+    def _user_fixture():
+        """
+        Базовая фикстура создания пользователя.
+        """
+        payload, response = UserManager.create_test_user()
+        token = UserManager.extract_token(response)
         
-        if response.status_code != ResponseCode.OK:
-            # Подробная диагностика ошибки
-            error_details = (
-                f"Не удалось создать пользователя для тестов.\n"
-                f"Код ответа: {response.status_code}\n"
-                f"Email: {payload['email']}\n"
-                f"Имя: {payload.get('name', 'Не указано')}\n"
-                f"Ответ сервера: {response.text}\n"
-                f"Заголовки ответа: {dict(response.headers)}"
-            )
-            logger.error(f"Ошибка создания пользователя: {error_details}")
-            pytest.fail(error_details)
-        
-        # Получаем токен для последующего удаления
-        response_data = response.json()
-        token = response_data.get("accessToken")
-        
-        if not token:
+        # Проверяем наличие токена для всех вариантов, кроме payload
+        if return_type != "payload" and not token:
             error_msg = (
                 f"Пользователь создан, но токен не получен.\n"
                 f"Email: {payload['email']}\n"
@@ -88,67 +98,34 @@ def registered_user_for_login():
             )
             logger.error(error_msg)
             pytest.fail(error_msg)
+        
+        # Возвращаем данные в зависимости от запрошенного типа
+        if return_type == "payload_response":
+            return_data = (payload, response)
+        elif return_type == "payload":
+            return_data = payload
+        elif return_type == "authenticated":
+            auth_header = {"Authorization": token}
+            return_data = (payload, auth_header)
+        elif return_type == "full":
+            return_data = (payload, response, token)
+        else:
+            raise ValueError(f"Неизвестный тип возвращаемых данных: {return_type}")
+        
+        yield return_data
+        
+        # АВТОМАТИЧЕСКАЯ ОЧИСТКА ПОСЛЕ ТЕСТА
+        if token:
+            UserManager.cleanup_user(token, payload['email'])
     
-    # Передаем данные пользователя тесту
-    yield payload
-    
-    # АВТОМАТИЧЕСКАЯ ОЧИСТКА ПОСЛЕ ТЕСТА
-    if token:
-        with allure.step(f"Очистка: удаление пользователя (постусловие): {payload['email']}"):
-            try:
-                delete_response = delete_user(token)
-                if delete_response.status_code != ResponseCode.OK:
-                    logger.warning(
-                        f"Не удалось удалить пользователя {payload['email']}: "
-                        f"статус={delete_response.status_code}"
-                    )
-            except Exception as e:
-                logger.error(f"Ошибка при очистке для {payload['email']}: {e}")
+    return _user_fixture
 
 
-@pytest.fixture
-def authenticated_user():
-    """
-    Фикстура создает и авторизует пользователя как предусловие.
-    Возвращает: (payload, auth_header)
-    АВТОМАТИЧЕСКИ удаляет пользователя после теста.
-    """
-    payload = User.create_data_correct_user()
-    token = None
-    
-    with allure.step(f"Создание пользователя для авторизации (предусловие): {payload['email']}"):
-        response = creating_new_user(payload)
-        
-        if response.status_code != ResponseCode.OK:
-            error_msg = (
-                f"Не удалось создать пользователя.\n"
-                f"Код ответа: {response.status_code}\n"
-                f"Email: {payload['email']}\n"
-                f"Ответ сервера: {response.text}"
-            )
-            pytest.fail(error_msg)
-        
-        token = response.json().get("accessToken")
-        if not token:
-            error_msg = f"Не получен accessToken для пользователя {payload['email']}"
-            pytest.fail(error_msg)
-        
-        auth_header = {"Authorization": token}
-    
-    yield payload, auth_header
-    
-    # АВТОМАТИЧЕСКАЯ ОЧИСТКА ПОСЛЕ ТЕСТА
-    if token:
-        with allure.step(f"Очистка: удаление пользователя (постусловие): {payload['email']}"):
-            try:
-                delete_response = delete_user(token)
-                if delete_response.status_code != ResponseCode.OK:
-                    logger.warning(
-                        f"Не удалось удалить пользователя {payload['email']}: "
-                        f"статус={delete_response.status_code}"
-                    )
-            except Exception as e:
-                logger.error(f"Ошибка при очистке для {payload['email']}: {e}")
+# Создаем фикстуры используя фабрику
+user_with_cleanup = user_fixture_factory(return_type="payload_response")
+registered_user_for_login = user_fixture_factory(return_type="payload")
+authenticated_user = user_fixture_factory(return_type="authenticated")
+debug_user = user_fixture_factory(return_type="full")
 
 
 @pytest.fixture
@@ -161,38 +138,83 @@ def user_factory():
     """
     created_users = []
     
-    def _create_user():
+    def _create_user(return_token: bool = False):
         """
-        Создает нового пользователя и возвращает (payload, response)
-        """
-        payload = User.create_data_correct_user()
+        Создает нового пользователя.
         
-        with allure.step(f"Создание пользователя (часть теста): {payload['email']}"):
-            response = creating_new_user(payload)
+        Args:
+            return_token: если True, возвращает также токен
+        
+        Returns:
+            (payload, response) или (payload, response, token)
+        """
+        payload, response = UserManager.create_test_user()
         
         if response.status_code == ResponseCode.OK:
-            created_users.append((payload, response))
+            token = UserManager.extract_token(response)
+            created_users.append((payload, response, token))
         
+        if return_token and token:
+            return payload, response, token
         return payload, response
     
     yield _create_user
     
     # АВТОМАТИЧЕСКАЯ ОЧИСТКА ВСЕХ СОЗДАННЫХ ПОЛЬЗОВАТЕЛЕЙ ПОСЛЕ ТЕСТА
     with allure.step("Очистка: удаление всех созданных пользователей"):
-        for payload, response in created_users:
-            try:
-                token = response.json().get("accessToken")
-                if token:
-                    delete_response = delete_user(token)
-                    if delete_response.status_code != ResponseCode.OK:
-                        logger.warning(
-                            f"Не удалось удалить пользователя {payload['email']}: "
-                            f"статус={delete_response.status_code}"
-                        )
-            except Exception as e:
-                logger.error(f"Ошибка при очистке для {payload['email']}: {e}")
+        for payload, response, token in created_users:
+            if token:
+                UserManager.cleanup_user(token, payload['email'])
 
 
+@pytest.fixture
+def dynamic_user_fixture():
+    """
+    Динамическая фикстура, которая позволяет тестам указывать тип возвращаемых данных.
+    
+    Пример использования в тесте:
+    def test_something(dynamic_user_fixture):
+        payload, response = dynamic_user_fixture("payload_response")
+    """
+    def _get_user(return_type: str = "payload_response"):
+        """
+        Создает пользователя с указанным типом возвращаемых данных.
+        
+        Args:
+            return_type: тип возвращаемых данных (аналогично user_fixture_factory)
+        """
+        payload, response = UserManager.create_test_user()
+        token = UserManager.extract_token(response)
+        
+        if not token:
+            error_msg = f"Не получен accessToken для пользователя {payload['email']}"
+            pytest.fail(error_msg)
+        
+        # Запланируем удаление пользователя после теста
+        def cleanup():
+            UserManager.cleanup_user(token, payload['email'])
+        
+        # Используем addfinalizer для гарантированного удаления
+        request = pytest.getfixturevalue('request')
+        request.addfinalizer(cleanup)
+        
+        # Возвращаем данные в зависимости от типа
+        if return_type == "payload_response":
+            return payload, response
+        elif return_type == "payload":
+            return payload
+        elif return_type == "authenticated":
+            auth_header = {"Authorization": token}
+            return payload, auth_header
+        elif return_type == "full":
+            return payload, response, token
+        else:
+            raise ValueError(f"Неизвестный тип возвращаемых данных: {return_type}")
+    
+    return _get_user
+
+
+# Остальные фикстуры (не связанные с пользователями) остаются без изменений
 @pytest.fixture(scope="session")
 def available_ingredients():
     """
@@ -318,30 +340,5 @@ def clean_test_environment():
         pass
 
 
-@pytest.fixture
-def debug_user_creation():
-    """
-    Вспомогательная фикстура для отладки создания пользователя.
-    Создает пользователя и выводит детальную информацию.
-    """
-    payload = User.create_data_correct_user()
-    
-    print(f"\n{'='*60}")
-    print("DEBUG: Создание тестового пользователя")
-    print(f"{'='*60}")
-    print(f"Email: {payload['email']}")
-    print(f"Name: {payload['name']}")
-    print(f"Password: {payload['password'][:10]}...")
-    print(f"{'-'*60}")
-    
-    response = creating_new_user(payload)
-    
-    print(f"Status Code: {response.status_code}")
-    print(f"Response: {response.text}")
-    print(f"{'='*60}\n")
-    
-    if response.status_code == ResponseCode.OK:
-        token = response.json().get("accessToken")
-        yield payload, response, token
-    else:
-        yield payload, response, None
+# Алиасы для обратной совместимости (если нужно)
+debug_user_creation = debug_user
