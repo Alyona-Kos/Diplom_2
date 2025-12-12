@@ -1,1 +1,0 @@
-[33mWARNING [0m conftest:conftest.py:108 Не удалось удалить пользователя koshelevuljan@example.com: статус=202

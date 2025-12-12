@@ -1,1 +1,0 @@
-[33mWARNING [0m conftest:conftest.py:71 Не удалось удалить пользователя urodionov@example.net: статус=202

@@ -1,1 +1,0 @@
-Warning: Failed to delete user vitali_2025@example.com

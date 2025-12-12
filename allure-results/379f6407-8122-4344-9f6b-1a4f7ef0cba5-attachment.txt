@@ -1,1 +1,0 @@
-Warning: Failed to delete user nikodim_1992@example.com
